@@ -1,8 +1,8 @@
-import { SchematicsException, Tree, SchematicContext } from '@angular-devkit/schematics';
-import { FirebaseHostingSite, FirebaseRc } from './interfaces';
+import { SchematicContext, SchematicsException, Tree } from '@angular-devkit/schematics';
 import * as semver from 'semver';
+import { FirebaseHostingSite } from './interfaces';
 
-export const shortSiteName = (site?: FirebaseHostingSite) => site?.name && site.name.split('/').pop();
+export const shortSiteName = (site?: FirebaseHostingSite) => site?.name?.split('/').pop();
 
 export const stringifyFormatted = (obj: any) => JSON.stringify(obj, null, 2);
 
@@ -18,47 +18,9 @@ export const overwriteIfExists = (
   }
 };
 
-function emptyFirebaseRc() {
-  return {
-    targets: {}
-  };
-}
-
-function generateFirebaseRcTarget(firebaseProject: string, firebaseHostingSite: FirebaseHostingSite|undefined, project: string) {
-  return {
-    hosting: {
-      [project]: [
-        shortSiteName(firebaseHostingSite) ?? firebaseProject
-      ]
-    }
-  };
-}
-
-export function generateFirebaseRc(
-  tree: Tree,
-  path: string,
-  firebaseProject: string,
-  firebaseHostingSite: FirebaseHostingSite|undefined,
-  project: string
-) {
-  const firebaseRc: FirebaseRc = tree.exists(path)
-    ? safeReadJSON(path, tree)
-    : emptyFirebaseRc();
-
-  firebaseRc.targets = firebaseRc.targets || {};
-  firebaseRc.targets[firebaseProject] = generateFirebaseRcTarget(
-    firebaseProject,
-    firebaseHostingSite,
-    project
-  );
-  firebaseRc.projects = { default: firebaseProject };
-
-  overwriteIfExists(tree, path, stringifyFormatted(firebaseRc));
-}
-
 export function safeReadJSON(path: string, tree: Tree) {
   try {
-    // tslint:disable-next-line:no-non-null-assertion
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     return JSON.parse(tree.read(path)!.toString());
   } catch (e) {
     throw new SchematicsException(`Error when parsing ${path}: ${e.message}`);
@@ -67,7 +29,7 @@ export function safeReadJSON(path: string, tree: Tree) {
 
 export const addDependencies = (
   host: Tree,
-  deps: { [name: string]: { dev?: boolean, version: string } },
+  deps: Record<string, { dev?: boolean, version: string }>,
   context: SchematicContext
 ) => {
   const packageJson =

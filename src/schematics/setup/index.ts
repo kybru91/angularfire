@@ -1,113 +1,40 @@
-import { asWindowsPath, normalize } from '@angular-devkit/core';
-import { SchematicContext, SchematicsException, Tree } from '@angular-devkit/schematics';
-import {
-  getWorkspace, getProject, getFirebaseProjectNameFromHost, addEnvironmentEntry,
-  addToNgModule, addIgnoreFiles, addFixesToServer
-} from '../utils';
-import { projectTypePrompt, appPrompt, sitePrompt, projectPrompt, featuresPrompt, userPrompt } from './prompts';
-import { setupUniversalDeployment } from './ssr';
-import { setupStaticDeployment } from './static';
-import {
-  FirebaseApp, FirebaseHostingSite, FirebaseProject, DeployOptions, NgAddNormalizedOptions,
-  FEATURES, PROJECT_TYPE
-} from '../interfaces';
-import { getFirebaseTools } from '../firebaseTools';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
+import { asWindowsPath, normalize } from '@angular-devkit/core';
+import { SchematicContext, Tree, chain } from '@angular-devkit/schematics';
+import { addRootProvider } from '@schematics/angular/utility';
+import { getFirebaseTools } from '../firebaseTools';
+import {
+  DeployOptions, FEATURES, FirebaseApp, FirebaseProject,
+} from '../interfaces';
+import {
+  addIgnoreFiles,
+  featureToRules,
+  getFirebaseProjectNameFromHost,
+  getProject,
+} from '../utils';
+import { appPrompt, featuresPrompt, projectPrompt, userPrompt } from './prompts';
+
+export interface SetupConfig extends DeployOptions {
+  firebaseProject: FirebaseProject,
+  firebaseApp?: FirebaseApp,
+  sdkConfig?: Record<string, string>,
+}
 
 export const setupProject =
-  async (tree: Tree, context: SchematicContext, features: FEATURES[], config: DeployOptions & {
-    firebaseProject: FirebaseProject,
-    firebaseApp?: FirebaseApp,
-    firebaseHostingSite?: FirebaseHostingSite,
-    sdkConfig?: Record<string, string>,
-    projectType: PROJECT_TYPE,
-    prerender: boolean,
-    nodeVersion?: string,
-    browserTarget?: string,
-    serverTarget?: string,
-    prerenderTarget?: string,
-    project: string,
-  }) => {
-    const { path: workspacePath, workspace } = getWorkspace(tree);
-
-    const { project, projectName } = getProject(config, tree);
-
-    const sourcePath = project.sourceRoot ?? project.root;
+  (tree: Tree, context: SchematicContext, features: FEATURES[], config: SetupConfig) => {
+    const { projectName } = getProject(config, tree);
 
     addIgnoreFiles(tree);
 
-    const featuresToImport = features.filter(it => it !== FEATURES.Hosting);
-    if (featuresToImport.length > 0) {
-      addToNgModule(tree, { features: featuresToImport, sourcePath });
-      addFixesToServer(tree, { features: featuresToImport, sourcePath });
-    }
-
-    if (config.sdkConfig) {
-      const source = `
-  firebase: {
-${Object.entries(config.sdkConfig).reduce(
-    (c, [k, v]) => c.concat(`    ${k}: '${v}'`),
-    [] as string[]
-).join(',\n')},
-  }`;
-
-      const environmentPath = `${sourcePath}/environments/environment.ts`;
-      addEnvironmentEntry(tree, `/${environmentPath}`, source);
-
-      // Iterate over the replacements for the environment file and add the config
-      Object.values(project.architect || {}).forEach(builder => {
-        Object.values(builder.configurations || {}).forEach(configuration => {
-          (configuration.fileReplacements || []).forEach((replacement: any) => {
-            if (replacement.replace === environmentPath) {
-              addEnvironmentEntry(tree, `/${replacement.with}`, source);
-            }
-          });
-        });
-      });
-    }
-
-    const options: NgAddNormalizedOptions = {
-      project: projectName,
-      firebaseProject: config.firebaseProject,
-      firebaseApp: config.firebaseApp,
-      firebaseHostingSite: config.firebaseHostingSite,
-      sdkConfig: config.sdkConfig,
-      prerender: config.prerender,
-      browserTarget: config.browserTarget,
-      serverTarget: config.serverTarget,
-      prerenderTarget: config.prerenderTarget,
-    };
-
-    if (features.includes(FEATURES.Hosting)) {
-      // TODO dry up by always doing the static work
-      switch (config.projectType) {
-        case PROJECT_TYPE.CloudFunctions:
-        case PROJECT_TYPE.CloudRun:
-          return setupUniversalDeployment({
-            workspace,
-            workspacePath,
-            options,
-            tree,
-            context,
-            project,
-            projectType: config.projectType,
-            // tslint:disable-next-line:no-non-null-assertion
-            nodeVersion: config.nodeVersion!,
-          });
-        case PROJECT_TYPE.Static:
-          return setupStaticDeployment({
-            workspace,
-            workspacePath,
-            options,
-            tree,
-            context,
-            project
-          });
-        default: throw(new SchematicsException(`Unimplemented PROJECT_TYPE ${config.projectType}`));
-      }
-    } else {
-      return Promise.resolve();
+    if (features.length) {
+      return chain([
+        addRootProvider(projectName, ({code, external}) => {
+          external('initializeApp', '@angular/fire/app');
+          return code`${external('provideFirebaseApp', '@angular/fire/app')}(() => initializeApp(${JSON.stringify(config.sdkConfig)}))`;
+        }),
+        ...featureToRules(features, projectName),
+      ]);
     }
 };
 
@@ -129,39 +56,31 @@ export const ngAddSetupProject = (
     if (!host.exists('/firebase.json')) { writeFileSync(join(projectRoot, 'firebase.json'), '{}'); }
 
     const user = await userPrompt({ projectRoot });
-    await firebaseTools.login.use(user.email, { projectRoot });
+    const defaultUser = await firebaseTools.login(options);
+    if (user.email !== defaultUser?.email) {
+      await firebaseTools.login.use(user.email, { projectRoot });
+    }
 
-    const { project: ngProject, projectName: ngProjectName } = getProject(options, host);
+    const { projectName: ngProjectName } = getProject(options, host);
 
     const [ defaultProjectName ] = getFirebaseProjectNameFromHost(host, ngProjectName);
 
     const firebaseProject = await projectPrompt(defaultProjectName, { projectRoot, account: user.email });
-
-    let hosting = { projectType: PROJECT_TYPE.Static, prerender: false };
-    let firebaseHostingSite: FirebaseHostingSite|undefined;
-
-    if (features.includes(FEATURES.Hosting)) {
-      // TODO read existing settings from angular.json, if available
-      const results = await projectTypePrompt(ngProject, ngProjectName);
-      hosting = { ...hosting, ...results };
-      firebaseHostingSite = await sitePrompt(firebaseProject, { projectRoot });
-    }
-
+    
     let firebaseApp: FirebaseApp|undefined;
     let sdkConfig: Record<string, string>|undefined;
 
-    if (features.find(it => it !== FEATURES.Hosting)) {
+    if (features.length) {
 
-      const defaultAppId = firebaseHostingSite?.appId;
-      firebaseApp = await appPrompt(firebaseProject, defaultAppId, { projectRoot });
+      firebaseApp = await appPrompt(firebaseProject, undefined, { projectRoot });
 
       const result = await firebaseTools.apps.sdkconfig('web', firebaseApp.appId, { nonInteractive: true, projectRoot });
       sdkConfig = result.sdkConfig;
 
     }
 
-    await setupProject(host, context, features, {
-      ...options, ...hosting, firebaseProject, firebaseApp, firebaseHostingSite, sdkConfig,
+    return setupProject(host, context, features, {
+      ...options, firebaseProject, firebaseApp, sdkConfig,
     });
 
   }

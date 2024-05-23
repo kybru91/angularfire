@@ -57,9 +57,9 @@ and help you to craft the change so that it is successfully accepted into the pr
 ```shell
 $ git clone <your fork SSH/HTTPS from GitHub>
 $ cd angularfire
-$ yarn
-$ yarn build
-$ yarn test:all
+$ npm i
+$ npm run build
+$ npm run test:all
 ```
 
 3) Make your changes in a new git branch:
@@ -146,7 +146,7 @@ changes to be accepted, the CLA must be signed. It's a quick process, we promise
 
 
 [slack]: https://firebase-community.appspot.com/
-[coc]: https://github.com/angular/code-of-conduct/blob/master/CODE_OF_CONDUCT.md
+[coc]: https://github.com/angular/code-of-conduct/blob/main/CODE_OF_CONDUCT.md
 [commit-message-format]: https://docs.google.com/document/d/1QrDFcIiPjSLDn3EL15IJygNPiHORgU1_OOAqWjiDU5Y/edit#
 [corporate-cla]: https://code.google.com/legal/corporate-cla-v1.0.html
 [individual-cla]: http://code.google.com/legal/individual-cla-v1.0.html

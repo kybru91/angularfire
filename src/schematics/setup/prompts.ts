@@ -1,14 +1,14 @@
+import { spawnSync } from 'child_process';
 import * as fuzzy from 'fuzzy';
 import * as inquirer from 'inquirer';
-import { featureOptions, FEATURES, FirebaseApp, FirebaseHostingSite, FirebaseProject, PROJECT_TYPE, WorkspaceProject } from '../interfaces';
-import { hasPrerenderOption, isUniversalApp, shortAppId } from '../utils';
 import { getFirebaseTools } from '../firebaseTools';
-import { shortSiteName } from '../common';
+import { FEATURES, FirebaseApp, FirebaseProject, featureOptions } from '../interfaces';
+import { shortAppId } from '../utils';
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 inquirer.registerPrompt('autocomplete', require('inquirer-autocomplete-prompt'));
 
 const NEW_OPTION = '~~angularfire-new~~';
-const DEFAULT_SITE_TYPE = 'DEFAULT_SITE';
 
 // `fuzzy` passes either the original list of projects or an internal object
 // which contains the project as a property.
@@ -20,11 +20,8 @@ const isApp = (elem: FirebaseApp | fuzzy.FilterResult<FirebaseApp>): elem is Fir
     return (elem as { original: FirebaseApp }).original === undefined;
 };
 
-const isSite = (elem: FirebaseHostingSite | fuzzy.FilterResult<FirebaseHostingSite>): elem is FirebaseHostingSite => {
-    return (elem as { original: FirebaseHostingSite }).original === undefined;
-};
-
 export const searchProjects = (projects: FirebaseProject[]) =>
+  // eslint-disable-next-line @typescript-eslint/require-await
     async (_: any, input: string) => {
         projects.unshift({
             projectId: NEW_OPTION,
@@ -50,6 +47,7 @@ export const searchProjects = (projects: FirebaseProject[]) =>
     };
 
 export const searchApps = (apps: FirebaseApp[]) =>
+  // eslint-disable-next-line @typescript-eslint/require-await
   async (_: any, input: string) => {
     apps.unshift({
       appId: NEW_OPTION,
@@ -74,32 +72,6 @@ export const searchApps = (apps: FirebaseApp[]) =>
     });
   };
 
-export const searchSites = (sites: FirebaseHostingSite[]) =>
-  async (_: any, input: string) => {
-    sites.unshift({
-      name: NEW_OPTION,
-      defaultUrl: '[CREATE NEW SITE]',
-    } as any);
-    return fuzzy.filter(input, sites, {
-      extract(el) {
-        return el.defaultUrl;
-      }
-    }).map((result) => {
-      let original: FirebaseHostingSite;
-      if (isSite(result)) {
-        original = result;
-      } else {
-        original = result.original;
-      }
-      return {
-        name: original.defaultUrl,
-        title: original.defaultUrl,
-        value: shortSiteName(original),
-      };
-    });
-  };
-
-
 type Prompt = <K extends string, U= unknown>(questions: { name: K, source: (...args) =>
   Promise<{ value: U }[]>, default?: U | ((o: U[]) => U | Promise<U>), [key: string]: any }) =>
     Promise<{[T in K]: U }>;
@@ -113,21 +85,20 @@ export const featuresPrompt = async (): Promise<FEATURES[]> => {
     name: 'features',
     choices: featureOptions,
     message: 'What features would you like to setup?',
-    default: [FEATURES.Hosting],
-  });
+    default: [],
+  }) as { features: FEATURES[] };
   return features;
 };
 
-export const userPrompt = async (options: {}): Promise<Record<string, any>> => {
+export const userPrompt = async (options: { projectRoot: string }): Promise<Record<string, any>> => {
   const firebaseTools = await getFirebaseTools();
-  const users = await firebaseTools.login.list();
-  if (!users || users.length === 0) {
-    await firebaseTools.login(); // first login isn't returning anything of value
-    const user = await firebaseTools.login(options);
-    return user;
+  let loginList = await firebaseTools.login.list();
+  if (!Array.isArray(loginList) || loginList.length === 0) {
+    spawnSync('firebase login', { shell: true, cwd: options.projectRoot, stdio: 'inherit' });
+    return await firebaseTools.login(options);
   } else {
     const defaultUser = await firebaseTools.login(options);
-    const choices = users.map(({user}) => ({ name: user.email, value: user }));
+    const choices = loginList.map(({user}) => ({ name: user.email, value: user }));
     const newChoice = { name: '[Login in with another account]', value: NEW_OPTION };
     const { user } = await inquirer.prompt({
       type: 'list',
@@ -135,16 +106,25 @@ export const userPrompt = async (options: {}): Promise<Record<string, any>> => {
       choices: [newChoice].concat(choices as any), // TODO types
       message: 'Which Firebase account would you like to use?',
       default: choices.find(it => it.value.email === defaultUser.email)?.value,
-    });
+    }) as any;
     if (user === NEW_OPTION) {
-      const { user } = await firebaseTools.login.add();
-      return user;
+      spawnSync('firebase login:add', { shell: true, cwd: options.projectRoot, stdio: 'inherit' });
+      loginList = await firebaseTools.login.list();
+      if (!Array.isArray(loginList)) {
+        throw new Error("firebase login:list did not respond as expected");
+      }
+      const priorEmails = choices.map(it => it.name);
+      const newLogin = loginList.find(it => !priorEmails.includes(it.user.email));
+      if (!newLogin) {
+        throw new Error("Did not find a new user.");
+      }
+      return newLogin.user;
     }
     return user;
   }
 };
 
-export const projectPrompt = async (defaultProject: string|undefined, options: {}) => {
+export const projectPrompt = async (defaultProject: string|undefined, options: unknown) => {
   const firebaseTools = await getFirebaseTools();
   const projects = await firebaseTools.projects.list(options);
   const { projectId } = await autocomplete({
@@ -159,20 +139,20 @@ export const projectPrompt = async (defaultProject: string|undefined, options: {
       type: 'input',
       name: 'projectId',
       message: `Please specify a unique project id (cannot be modified afterward) [6-30 characters]:`,
-    });
+    }) as { projectId: string };
     const { displayName } = await inquirer.prompt({
       type: 'input',
       name: 'displayName',
       message: 'What would you like to call your project?',
       default: projectId,
-    });
+    }) as { displayName: string };
     return await firebaseTools.projects.create(projectId, { account: (options as any).account, displayName, nonInteractive: true });
   }
-  // tslint:disable-next-line:no-non-null-assertion
-  return (await projects).find(it => it.projectId === projectId)!;
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  return (projects).find(it => it.projectId === projectId)!;
 };
 
-export const appPrompt = async ({ projectId: project }: FirebaseProject, defaultAppId: string|undefined, options: {}) => {
+export const appPrompt = async ({ projectId: project }: FirebaseProject, defaultAppId: string|undefined, options: any) => {
   const firebaseTools = await getFirebaseTools();
   const apps = await firebaseTools.apps.list('web', { ...options, project });
   const { appId } = await autocomplete({
@@ -187,99 +167,9 @@ export const appPrompt = async ({ projectId: project }: FirebaseProject, default
       type: 'input',
       name: 'displayName',
       message: 'What would you like to call your app?',
-    });
+    }) as { displayName: string };
     return await firebaseTools.apps.create('web', displayName, { ...options, nonInteractive: true, project });
   }
-  // tslint:disable-next-line:no-non-null-assertion
-  return (await apps).find(it => shortAppId(it) === appId)!;
-};
-
-export const sitePrompt = async ({ projectId: project }: FirebaseProject, options: {}) => {
-  const firebaseTools = await getFirebaseTools();
-  const sites = await firebaseTools.hosting.sites.list({ ...options, project }).then(it => {
-    if (it.sites.length === 0) {
-      // newly created projects don't return their default site, stub one
-      return [{
-        name: project,
-        defaultUrl: `https://${project}.web.app`,
-        type: DEFAULT_SITE_TYPE,
-        appId: undefined,
-      } as FirebaseHostingSite];
-    } else {
-      return it.sites;
-    }
-  });
-  const { siteName } = await autocomplete({
-    type: 'autocomplete',
-    name: 'siteName',
-    source: searchSites(sites),
-    message: 'Please select a hosting site:',
-    default: _ => shortSiteName(sites.find(site => site.type === DEFAULT_SITE_TYPE)),
-  });
-  if (siteName === NEW_OPTION) {
-    const { subdomain } = await inquirer.prompt({
-      type: 'input',
-      name: 'subdomain',
-      message: 'Please provide an unique, URL-friendly id for the site (<id>.web.app):',
-    });
-    return await firebaseTools.hosting.sites.create(subdomain, { ...options, nonInteractive: true, project });
-  }
-  // tslint:disable-next-line:no-non-null-assertion
-  return (await sites).find(it => shortSiteName(it) === siteName)!;
-};
-
-export const projectTypePrompt = async (project: WorkspaceProject, name: string) => {
-  let prerender = false;
-  let nodeVersion: string|undefined;
-  let serverTarget: string|undefined;
-  let browserTarget = `${name}:build:${project.architect?.build?.defaultConfiguration || 'production'}`;
-  let prerenderTarget: string|undefined;
-  if (isUniversalApp(project)) {
-    serverTarget = `${name}:server:${project.architect?.server?.defaultConfiguration || 'production'}`;
-    browserTarget = `${name}:build:${project.architect?.build?.defaultConfiguration || 'production'}`;
-    if (hasPrerenderOption(project)) {
-      prerenderTarget = `${name}:prerender:${project.architect?.prerender?.defaultConfiguration || 'production'}`;
-      const { shouldPrerender } = await inquirer.prompt({
-        type: 'confirm',
-        name: 'shouldPrerender',
-        message: 'Should we prerender before deployment?',
-        default: true
-      });
-      prerender = shouldPrerender;
-    }
-    const choices = [
-      { name: prerender ? 'Pre-render only' : 'Don\'t render universal content', value: PROJECT_TYPE.Static },
-      { name: 'Cloud Functions', value: PROJECT_TYPE.CloudFunctions },
-      { name: 'Cloud Run', value: PROJECT_TYPE.CloudRun },
-    ];
-    const { projectType } = await inquirer.prompt({
-      type: 'list',
-      name: 'projectType',
-      choices,
-      message: 'How would you like to render server-side content?',
-      default: PROJECT_TYPE.CloudFunctions,
-    });
-    if (projectType === PROJECT_TYPE.CloudFunctions) {
-      const { newNodeVersion } = await inquirer.prompt({
-        type: 'list',
-        name: 'newNodeVersion',
-        choices: ['12', '14', '16'],
-        message: 'What version of Node.js would you like to use?',
-        default: parseInt(process.versions.node, 10).toString(),
-      });
-      nodeVersion = newNodeVersion;
-    } else if (projectType === PROJECT_TYPE.CloudRun) {
-      const fetch = require('node-fetch');
-      const { newNodeVersion } = await inquirer.prompt({
-        type: 'input',
-        name: 'newNodeVersion',
-        message: 'What version of Node.js would you like to use?',
-        validate: it => fetch(`https://hub.docker.com/v2/repositories/library/node/tags/${it}-slim`).then(it => it.status === 200 || `Can't find node:${it}-slim docker image.`),
-        default: parseFloat(process.versions.node).toString(),
-      });
-      nodeVersion = newNodeVersion;
-    }
-    return { prerender, projectType, nodeVersion, browserTarget, serverTarget, prerenderTarget };
-  }
-  return { projectType: PROJECT_TYPE.Static, prerender, nodeVersion, browserTarget, serverTarget, prerenderTarget };
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  return (apps).find(it => shortAppId(it) === appId)!;
 };

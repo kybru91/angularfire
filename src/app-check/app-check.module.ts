@@ -1,16 +1,25 @@
-import { NgModule, Optional, NgZone, InjectionToken, ModuleWithProviders, PLATFORM_ID, isDevMode, Injector } from '@angular/core';
-import { AppCheck as FirebaseAppCheck } from 'firebase/app-check';
-import { ɵgetDefaultInstanceOf, ɵAngularFireSchedulers, VERSION } from '@angular/fire';
-import { AppCheck, AppCheckInstances, APP_CHECK_PROVIDER_NAME } from './app-check';
-import { FirebaseApps, FirebaseApp } from '@angular/fire/app';
-import { registerVersion } from 'firebase/app';
 import { isPlatformServer } from '@angular/common';
+import {
+  EnvironmentProviders,
+  InjectionToken,
+  Injector,
+  NgModule,
+  NgZone,
+  Optional,
+  PLATFORM_ID,
+  isDevMode,
+  makeEnvironmentProviders,
+} from '@angular/core';
+import { VERSION, ɵAPP_CHECK_PROVIDER_NAME, ɵAngularFireSchedulers, ɵAppCheckInstances, ɵgetDefaultInstanceOf } from '@angular/fire';
+import { FirebaseApp, FirebaseApps } from '@angular/fire/app';
+import { registerVersion } from 'firebase/app';
+import { AppCheck as FirebaseAppCheck } from 'firebase/app-check';
+import { AppCheck } from './app-check';
 
 export const PROVIDED_APP_CHECK_INSTANCES = new InjectionToken<AppCheck[]>('angularfire2.app-check-instances');
-export const APP_CHECK_NAMESPACE_SYMBOL = Symbol('angularfire2.app-check.namespace');
 
 export function defaultAppCheckInstanceFactory(provided: FirebaseAppCheck[]|undefined, defaultApp: FirebaseApp) {
-  const defaultAppCheck = ɵgetDefaultInstanceOf<FirebaseAppCheck>(APP_CHECK_PROVIDER_NAME, provided, defaultApp);
+  const defaultAppCheck = ɵgetDefaultInstanceOf<FirebaseAppCheck>(ɵAPP_CHECK_PROVIDER_NAME, provided, defaultApp);
   return defaultAppCheck && new AppCheck(defaultAppCheck);
 }
 
@@ -18,8 +27,7 @@ const LOCALHOSTS = ['localhost', '0.0.0.0', '127.0.0.1'];
 const isLocalhost = typeof window !== 'undefined' && LOCALHOSTS.includes(window.location.hostname);
 
 export function appCheckInstanceFactory(fn: (injector: Injector) => FirebaseAppCheck) {
-  // tslint:disable-next-line:ban-types
-  return (zone: NgZone, injector: Injector, platformId: Object) => {
+   return (zone: NgZone, injector: Injector, platformId: unknown) => {
     // Node should use admin token provider, browser devmode and localhost should use debug token
     if (!isPlatformServer(platformId) && (isDevMode() || isLocalhost)) {
       globalThis.FIREBASE_APPCHECK_DEBUG_TOKEN ??= true;
@@ -30,7 +38,7 @@ export function appCheckInstanceFactory(fn: (injector: Injector) => FirebaseAppC
 }
 
 const APP_CHECK_INSTANCES_PROVIDER = {
-  provide: AppCheckInstances,
+  provide: ɵAppCheckInstances,
   deps: [
     [new Optional(), PROVIDED_APP_CHECK_INSTANCES ],
   ]
@@ -58,10 +66,12 @@ export class AppCheckModule {
   }
 }
 
-export function provideAppCheck(fn: (injector: Injector) => FirebaseAppCheck, ...deps: any[]): ModuleWithProviders<AppCheckModule> {
-  return {
-    ngModule: AppCheckModule,
-    providers: [{
+export function provideAppCheck(fn: (injector: Injector) => FirebaseAppCheck, ...deps: any[]): EnvironmentProviders {
+  registerVersion('angularfire', VERSION.full, 'app-check');
+  return makeEnvironmentProviders([
+    DEFAULT_APP_CHECK_INSTANCE_PROVIDER,
+    APP_CHECK_INSTANCES_PROVIDER,
+    {
       provide: PROVIDED_APP_CHECK_INSTANCES,
       useFactory: appCheckInstanceFactory(fn),
       multi: true,
@@ -73,6 +83,6 @@ export function provideAppCheck(fn: (injector: Injector) => FirebaseAppCheck, ..
         FirebaseApps,
         ...deps,
       ]
-    }]
-  };
+    }
+  ]);
 }
